@@ -1,12 +1,13 @@
 {
-  "Author": "your name here",
-  "Name": "Sample Plugin",
-  "Punchline": "A short one-liner that shows up in /xlplugins.",
-  "Description": "A description that shows up in /xlplugins. List any major slash-command(s).",
+  "Author": "Jake",
+  "Name": "SpellMage",
+  "Punchline": "API-powered spell-check helper for FFXIV chat.",
+  "Description": "Provides user-triggered spell-check suggestions and command-based correction for chat messages using LanguageTool. Does not edit the native chat bar.",
   "ApplicableVersion": "any",
   "Tags": [
-    "sample",
-    "plugin",
-    "goats"
+    "chat",
+    "spellcheck",
+    "typing",
+    "qol"
   ]
 }

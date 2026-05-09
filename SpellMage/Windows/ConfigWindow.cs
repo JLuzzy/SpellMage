@@ -55,5 +55,12 @@ public class ConfigWindow : Window, IDisposable
             configuration.IsConfigWindowMovable = movable;
             configuration.Save();
         }
+
+        var nativeRead = configuration.EnableNativeChatRead;
+        if (ImGui.Checkbox("Enable Native Chat Read (experimental)", ref nativeRead))
+        {
+            configuration.EnableNativeChatRead = nativeRead;
+            configuration.Save();
+        }
     }
 }

@@ -1,0 +1,14 @@
+# Common FFXIV terms to ignore
+FFXIV
+PF
+prog
+reclear
+glam
+materia
+Aetheryte
+Limsa
+WHM
+BLM
+RDM
+P12S
+o/
