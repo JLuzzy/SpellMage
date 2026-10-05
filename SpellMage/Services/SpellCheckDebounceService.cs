@@ -1,63 +1,55 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using SamplePlugin.Models;
+using SpellMage.Models;
+namespace SpellMage.Services;
 
-namespace SamplePlugin.Services;
-
+// Owned and polled by the UI/framework thread. Worker tasks never mutate UI state.
 public sealed class SpellCheckDebounceService : IDisposable
 {
-    private readonly SpellCheckApiService apiService;
-    private readonly TimeSpan debounceInterval;
-    private string lastCheckedText = string.Empty;
-    private CancellationTokenSource? cts;
-
-    public SpellCheckDebounceService(SpellCheckApiService apiService, TimeSpan? debounce = null)
+    private readonly SpellCheckApiService api;
+    private CancellationTokenSource? cancellation;
+    private Task<SpellCheckResult>? pending;
+    public bool IsChecking => pending != null;
+    public SpellCheckDebounceService(SpellCheckApiService api) => this.api = api;
+    public void Start(string text, CheckSettings settings, bool debounce = false)
     {
-        this.apiService = apiService;
-        debounceInterval = debounce ?? TimeSpan.FromMilliseconds(700);
+        Cancel();
+        var source = new CancellationTokenSource();
+        cancellation = source;
+        pending = RunAsync(text, settings, debounce, source.Token);
     }
-
-    public async Task<SpellCheckResult?> MaybeCheckAsync(ChatInputSnapshot snapshot, CancellationToken token)
+    private async Task<SpellCheckResult> RunAsync(string text, CheckSettings settings, bool debounce, CancellationToken token)
     {
         try
         {
-            if (snapshot == null) return null;
-            if (!snapshot.IsAvailable || !snapshot.IsFocused) return null;
-            var text = snapshot.Text ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(text) || text.Length < 3) return null;
-            if (text == lastCheckedText) return null;
-
-            cts?.Cancel();
-            cts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            var linked = cts.Token;
-
-            await Task.Delay(debounceInterval, linked).ConfigureAwait(false);
-
-            if (linked.IsCancellationRequested) return null;
-
-            var res = await apiService.CheckAsync(text, "en-US", linked).ConfigureAwait(false);
-            if (res != null && res.Success)
-            {
-                lastCheckedText = text;
-            }
-
-            return res;
+            if (debounce && !settings.IsPrivateEndpoint)
+                return new SpellCheckResult { OriginalText = text, StatusMessage = "Live checking requires a private LanguageTool server." };
+            if (debounce) await Task.Delay(900, token).ConfigureAwait(false);
+            return await api.CheckAsync(text, settings, token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error(ex, "SpellCheckDebounceService failed");
-            return null;
-        }
+        catch (OperationCanceledException) { return new SpellCheckResult { OriginalText = text, StatusMessage = "Canceled" }; }
+        catch (Exception) { return new SpellCheckResult { OriginalText = text, StatusMessage = "Spell check failed." }; }
     }
-
-    public void Dispose()
+    public SpellCheckResult? Poll()
     {
-        cts?.Cancel();
-        cts?.Dispose();
+        if (pending == null || !pending.IsCompleted) return null;
+        var result = pending.GetAwaiter().GetResult();
+        pending = null;
+        cancellation?.Dispose();
+        cancellation = null;
+        return result;
     }
+    public void Cancel()
+    {
+        var source = cancellation;
+        var task = pending;
+        cancellation = null;
+        pending = null;
+        if (source == null) return;
+        source.Cancel();
+        if (task == null || task.IsCompleted) source.Dispose();
+        else _ = task.ContinueWith(_ => source.Dispose(), TaskScheduler.Default);
+    }
+    public void Dispose() => Cancel();
 }

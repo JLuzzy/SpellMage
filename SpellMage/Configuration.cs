@@ -1,20 +1,18 @@
-﻿using Dalamud.Configuration;
+using Dalamud.Configuration;
 using System;
-
-namespace SamplePlugin;
+using SpellMage.Services;
+namespace SpellMage;
 
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 0;
-
-    public bool IsConfigWindowMovable { get; set; } = true;
-    public bool SomePropertyToBeSavedAndWithADefault { get; set; } = true;
+    public int Version { get; set; } = 1;
+    public bool ApiEnabled { get; set; } = false;
+    public string Language { get; set; } = "en-US";
+    public string Endpoint { get; set; } = CheckSettings.PublicEndpoint;
     public bool EnableNativeChatRead { get; set; } = false;
-
-    // The below exists just to make saving less cumbersome
-    public void Save()
-    {
-        Plugin.PluginInterface.SavePluginConfig(this);
-    }
+    public bool EnableLiveChecking { get; set; } = false;
+    public bool ShowOverlay { get; set; } = true;
+    public CheckSettings GetCheckSettings() => new(ApiEnabled, Language, Endpoint);
+    public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace SamplePlugin.Models;
+namespace SpellMage.Models;
 
 public class SpellCheckResult
 {

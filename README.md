@@ -1,78 +1,66 @@
-> ⚠️ **Don't click Fork!**
-> 
-> This is a GitHub Template repo. If you want to use this for a plugin, [use this template][new-repo] to make a new repo!
->
-> ![image](https://github.com/goatcorp/SamplePlugin/assets/16760685/d9732094-e1ed-4769-a70b-58ed2b92580c)
+# SpellMage
 
-# SamplePlugin
+SpellMage is a Dalamud plugin for reviewing FFXIV chat spelling and grammar with [LanguageTool](https://languagetool.org). Check text, choose individual corrections, and copy the reviewed message back into chat.
 
-[![Use This Template badge](https://img.shields.io/badge/Use%20This%20Template-0?logo=github&labelColor=grey)][new-repo]
+## Features
 
+- `/spellmage` opens the editor; `/spell <message>` opens and checks a message.
+- Each suggestion is unchecked initially. Only selected corrections change the reviewed output.
+- Protects slash-command tokens, URLs, email addresses, numbered tokens, placeholders, and dictionary terms from correction.
+- Saved API enablement, language, server endpoint, and native-reading preferences apply to both commands and windows.
+- Optional experimental native chat reading and a chat-anchored suggestions overlay.
+- Live checks run after 900 ms without a text change, **only against a configured private LanguageTool server**.
+- Does not send messages or write to the game chat input. Use the clipboard to transfer reviewed text.
 
-Simple example plugin for Dalamud.
+## Privacy and server configuration
 
-This is not designed to be the simplest possible example, but it is also not designed to cover everything you might want to do. For more detailed questions, come ask in [the Discord](https://discord.gg/holdshift).
+API checking and native reading are off by default. Enable checking in Settings after choosing a server. Manual checking uses `https://api.languagetool.org/v2/check` by default; entered text is sent to that service. Review [LanguageTool's privacy policy](https://languagetool.org/legal/privacy). SpellMage does not log message bodies or server response bodies.
 
-## Main Points
+The [public API rules](https://dev.languagetool.org/public-http-api.html) prohibit automated requests. Live checking is therefore blocked for `api.languagetool.org`. To check while typing, configure your own compatible server (for example, `http://localhost:8081/v2/check`), enable API checking, enable native reading, and enable live checking. Custom remote endpoints must use HTTPS. Authentication for paid API accounts is not implemented.
 
-* Simple functional plugin
-  * Slash command
-  * Main UI
-  * Settings UI
-  * Image loading
-  * Plugin json
-* Simple, slightly-improved plugin configuration handling
-* Project organization
-  * Copies all necessary plugin files to the output directory
-    * Does not copy dependencies that are provided by dalamud
-    * Output directory can be zipped directly and have exactly what is required
-  * Hides data files from visual studio to reduce clutter
-    * Also allows having data files in different paths than VS would usually allow if done in the IDE directly
+Live checking sends focused chat drafts to your configured server after a pause, even before you send the chat message. Leaving the chat input, clearing the draft, changing settings, or unloading the plugin cancels pending checks and clears the overlay. An in-flight request may already have reached the server before cancellation.
 
+## Build and test
 
-The intention is less that any of this is used directly in other projects, and more to show how similar things can be done.
+Prerequisites: .NET 10 SDK and Dalamud development assemblies for API level 15. Normally XIVLauncher supplies these after the game has run with Dalamud enabled. For a custom location, set `DALAMUD_HOME` to the folder containing `Dalamud.dll` and `FFXIVClientStructs.dll`.
 
-## How To Use
+```sh
+dotnet restore SpellMage.sln --locked-mode
+dotnet build SpellMage.sln --configuration Release --no-restore
+dotnet run --project SpellMage.Tests/SpellMage.Tests.csproj --configuration Release
+```
 
-### Getting Started
+The tests use fake HTTP handlers and require neither a running game nor an external spell-check server. They exercise the actual correction, API, and request lifecycle source files.
 
-To begin, [clone this template repository][new-repo] to your own GitHub account. This will automatically bring in everything you need to get a jumpstart on development. You do not need to fork this repository unless you intend to contribute modifications to it.
+Build outputs:
 
-Be sure to also check out the [Dalamud Developer Docs][dalamud-docs] for helpful information about building your own plugin. The Developer Docs includes helpful information about all sorts of things, including [how to submit][submit] your newly-created plugin to the official repository. Assuming you use this template repository, the provided project build configuration and license are already chosen to make everything a breeze.
+- Dev plugin: `SpellMage/bin/x64/Release/SpellMage.dll`
+- Release package: `SpellMage/bin/x64/Release/SpellMage/latest.zip`
+- The ZIP includes the manifest, assembly, dependency metadata, and `Dictionaries/ffxiv-ignore.txt`.
 
-[new-repo]: https://github.com/new?template_name=SamplePlugin&template_owner=goatcorp
-[dalamud-docs]: https://dalamud.dev
-[submit]: https://dalamud.dev/plugin-publishing/submission
+CI builds on Windows, runs the regression executable, verifies the ZIP contents, and uploads the release package. CI runs on PRs, pushes to `main`, `master`, or `dev/**`, and manual dispatch.
 
-### Prerequisites
+## Load in-game
 
-SamplePlugin assumes all the following prerequisites are met:
+1. Open `/xlsettings`, then Experimental, and add the full path to `SpellMage.dll` under Dev Plugin Locations.
+2. Enable SpellMage through `/xlplugins` → Dev Tools.
+3. Open `/spellmage`, select Settings, and enable API checking.
+4. Enter a test message, press Check, select desired corrections, and copy the reviewed text.
 
-* XIVLauncher, FINAL FANTASY XIV, and Dalamud have all been installed and the game has been run with Dalamud at least once.
-* XIVLauncher is installed to its default directories and configurations.
-  * If a custom path is required for Dalamud's dev directory, it must be set with the `DALAMUD_HOME` environment variable.
-* A .NET Core 8 SDK has been installed and configured, or is otherwise available. (In most cases, the IDE will take care of this.)
+If upgrading from the prototype, replace the old `SamplePlugin.dll` dev-plugin entry. The assembly/internal name changed, so existing settings may not migrate automatically; reconfigure SpellMage. Do not load both copies.
 
-### Building
+## Native integration status
 
-1. Open up `SamplePlugin.sln` in your C# editor of choice (likely [Visual Studio](https://visualstudio.microsoft.com) or [JetBrains Rider](https://www.jetbrains.com/rider/)).
-2. Build the solution. By default, this will build a `Debug` build, but you can switch to `Release` in your IDE.
-3. The resulting plugin can be found at `SamplePlugin/bin/x64/Debug/SamplePlugin.dll` (or `Release` if appropriate.)
+Native reading uses the typed `AddonChatLog.TextInput` structure from the FFXIVClientStructs assembly supplied by Dalamud. It accesses native pointers only on framework updates and never retains them. The previous reflection-based pointer guessing was removed. Auto-translate/link payloads are skipped.
 
-### Activating in-game
+This path **compiles against the downloaded Dalamud assemblies but has not been validated in a running game**. Native layouts and the input-active flag are game-version dependent. Keep it experimental until the [in-game checklist](docs/IN_GAME_TESTS.md) is completed. The overlay is informational; use the main editor to review individual corrections.
 
-1. Launch the game and use `/xlsettings` in chat or `xlsettings` in the Dalamud Console to open up the Dalamud settings.
-    * In here, go to `Experimental`, and add the full path to the `SamplePlugin.dll` to the list of Dev Plugin Locations.
-2. Next, use `/xlplugins` (chat) or `xlplugins` (console) to open up the Plugin Installer.
-    * In here, go to `Dev Tools > Installed Dev Plugins`, and the `SamplePlugin` should be visible. Enable it.
-3. You should now be able to use `/pmycommand` (chat) or `pmycommand` (console)!
+## Layout
 
-Note that you only need to add it to the Dev Plugin Locations once (Step 1); it is preserved afterwards. You can disable, enable, or load your plugin on startup through the Plugin Installer.
+- `Plugin.cs`: services, commands, framework updates, and cleanup.
+- `Services/`: LanguageTool HTTP client, protected correction logic, cancellable requests, and typed native input access.
+- `Windows/`: editor, settings, and native overlay.
+- `Models/`: API responses, suggestions, and input snapshots.
+- `SpellMage.Tests/`: standalone regression checks.
 
-### Reconfiguring for your own uses
-
-Replace all references to `SamplePlugin` in all the files and filenames with your desired name, then start building the plugin of your dreams. You'll figure it out 😁
-
-Dalamud will load the JSON file (by default, `SamplePlugin/SamplePlugin.json`) next to your DLL and use it for metadata, including the description for your plugin in the Plugin Installer. Make sure to update this with information relevant to _your_ plugin!
-
-All participation in this repository is governed by our [Code of Conduct](https://dalamud.dev/code-of-conduct). If you used AI tooling at any point, review the [AI Usage Policy](https://dalamud.dev/plugin-publishing/ai-policy) and disclose your level of AI use. Entirely AI-generated submissions will be rejected, and undisclosed AI use may result in a ban.
+Licensed under AGPL-3.0-or-later; see [LICENSE.md](LICENSE.md).

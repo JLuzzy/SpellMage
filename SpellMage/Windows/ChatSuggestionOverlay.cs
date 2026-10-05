@@ -1,55 +1,35 @@
 using System;
 using System.Numerics;
 using System.Collections.Generic;
-using Dalamud.Interface.Utility.Raii;
-using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
-using SamplePlugin.Models;
+using Dalamud.Interface.Windowing;
+using SpellMage.Models;
+namespace SpellMage.Windows;
 
-namespace SamplePlugin.Windows;
-
-public class ChatSuggestionOverlay : Window, IDisposable
+public sealed class ChatSuggestionOverlay : Window, IDisposable
 {
-    private IReadOnlyList<SpellSuggestion> suggestions = new List<SpellSuggestion>();
+    private IReadOnlyList<SpellSuggestion> suggestions = Array.Empty<SpellSuggestion>();
     private string status = string.Empty;
-    private Vector2 position = new Vector2(20, 700);
-
-    public ChatSuggestionOverlay()
-        : base("Spell Suggestions##ChatOverlay")
+    public Vector2 Anchor { get; set; }
+    public ChatSuggestionOverlay() : base("SpellMage native suggestions")
     {
-        Flags |= ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings;
-        Size = new Vector2(360, 120);
+        Flags = ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoInputs
+            | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
+        Size = new Vector2(400, 180);
     }
-
-    public void SetSuggestions(IReadOnlyList<SpellSuggestion> suggs, string status)
+    public override void PreDraw()
     {
-        this.suggestions = suggs ?? new List<SpellSuggestion>();
-        this.status = status ?? string.Empty;
+        var viewport = ImGui.GetMainViewport();
+        var position = viewport.Pos + Anchor - new Vector2(0, 190);
+        var upper = Vector2.Max(viewport.WorkPos, viewport.WorkPos + viewport.WorkSize - new Vector2(400, 180));
+        ImGui.SetNextWindowPos(Vector2.Clamp(position, viewport.WorkPos, upper), ImGuiCond.Always);
     }
-
-    public void Dispose() { }
-
+    public void SetSuggestions(IReadOnlyList<SpellSuggestion> value, string message) { suggestions = value; status = message; }
+    public void Clear() { suggestions = Array.Empty<SpellSuggestion>(); status = string.Empty; IsOpen = false; }
     public override void Draw()
     {
-        ImGui.SetNextWindowPos(position, ImGuiCond.FirstUseEver);
-
-        using (var child = ImRaii.Child("overlayChild", new Vector2(-1, -1), true))
-        {
-            if (!child.Success) return;
-
-            ImGui.TextColored(new System.Numerics.Vector4(0.8f, 0.9f, 1f, 1f), "SpellMage suggestions:");
-            ImGui.Separator();
-            foreach (var s in suggestions)
-            {
-                ImGui.Text($"{s.OriginalText} → {s.SuggestedText}");
-                ImGui.TextWrapped($"  {s.Message}");
-            }
-
-            if (!string.IsNullOrEmpty(status))
-            {
-                ImGui.Separator();
-                ImGui.TextColored(new System.Numerics.Vector4(1f, 0.6f, 0.6f, 1f), status);
-            }
-        }
+        ImGui.TextWrapped(status);
+        foreach (var suggestion in suggestions) ImGui.TextWrapped($"{suggestion.OriginalText} → {suggestion.SuggestedText}");
     }
+    public void Dispose() => Clear();
 }

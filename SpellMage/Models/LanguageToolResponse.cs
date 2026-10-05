@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace SamplePlugin.Models;
+namespace SpellMage.Models;
 
 public class LanguageToolResponse
 {

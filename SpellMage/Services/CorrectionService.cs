@@ -2,83 +2,56 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using SamplePlugin.Models;
+using System.Text.RegularExpressions;
+using SpellMage.Models;
 
-namespace SamplePlugin.Services;
+namespace SpellMage.Services;
 
 public sealed class CorrectionService
 {
-    private readonly HashSet<string> ignoreSet;
-
-    public CorrectionService()
+    private readonly HashSet<string> ignoreSet = new(StringComparer.OrdinalIgnoreCase)
+    { "FFXIV", "PF", "prog", "reclear", "glam", "materia", "Aetheryte", "Limsa", "WHM", "BLM", "RDM", "P12S", "o/" };
+    public CorrectionService(string? dictionaryPath = null)
     {
-        ignoreSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        var path = dictionaryPath ?? Path.Combine(AppContext.BaseDirectory, "Dictionaries", "ffxiv-ignore.txt");
+        if (!File.Exists(path)) return;
+        foreach (var line in File.ReadLines(path))
         {
-            "FFXIV","PF","prog","reclear","glam","materia","Aetheryte","Limsa",
-            "WHM","BLM","RDM","P12S","o/"
-        };
-
-        // Try to load extra ignore terms from Dictionaries/ffxiv-ignore.txt next to assembly
-        try
-        {
-            var asmPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            if (asmPath != null)
-            {
-                var dict = Path.Combine(asmPath, "Dictionaries", "ffxiv-ignore.txt");
-                if (File.Exists(dict))
-                {
-                    foreach (var ln in File.ReadAllLines(dict))
-                    {
-                        var t = ln.Trim();
-                        if (t.Length > 0 && !t.StartsWith("#")) ignoreSet.Add(t);
-                    }
-                }
-            }
+            var term = line.Trim();
+            if (term.Length > 0 && !term.StartsWith('#')) ignoreSet.Add(term);
         }
-        catch { }
+    }
+
+    public static bool IsValidRange(string text, int offset, int length) => offset >= 0 && length >= 0
+        && offset <= text.Length && length <= text.Length - offset
+        && IsBoundary(text, offset) && IsBoundary(text, offset + length);
+
+    private static bool IsBoundary(string text, int i) => i == 0 || i == text.Length
+        || !(char.IsHighSurrogate(text[i - 1]) && char.IsLowSurrogate(text[i]));
+
+    public IReadOnlyList<SpellSuggestion> Filter(string text, IReadOnlyList<SpellSuggestion> suggestions)
+    {
+        var protectedRanges = Regex.Matches(text, @"\S+").Cast<Match>()
+            .Where(m => ignoreSet.Contains(m.Value.Trim(',', '.', '!', '?', ':', ';'))
+                || m.Value.Any(char.IsDigit) || m.Value.StartsWith('/')
+                || m.Value.Contains("://") || m.Value.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+                || m.Value.Contains('@') || (m.Value.StartsWith('<') && m.Value.EndsWith('>'))).ToList();
+        var accepted = new List<SpellSuggestion>();
+        foreach (var s in suggestions.OrderBy(s => s.Offset).ThenByDescending(s => s.Length))
+        {
+            if (!IsValidRange(text, s.Offset, s.Length) || s.OriginalText != text.Substring(s.Offset, s.Length)) continue;
+            if (protectedRanges.Any(m => s.Offset < m.Index + m.Length && s.Offset + s.Length >= m.Index)) continue;
+            if (accepted.Any(a => s.Offset < a.Offset + a.Length || s.Offset == a.Offset)) continue;
+            accepted.Add(s);
+        }
+        return accepted;
     }
 
     public string ApplyCorrections(string original, IReadOnlyList<SpellSuggestion> suggestions)
     {
-        if (string.IsNullOrEmpty(original) || suggestions == null || suggestions.Count == 0)
-            return original ?? string.Empty;
-
-        // Work on a StringBuilder copy
         var output = original;
-
-        // Sort by offset descending so replacements don't shift remaining offsets
-        var ordered = suggestions.OrderByDescending(s => s.Offset).ToList();
-
-        foreach (var s in ordered)
-        {
-            if (string.IsNullOrEmpty(s.SuggestedText)) continue;
-
-            var frag = s.OriginalText?.Trim() ?? string.Empty;
-            if (string.IsNullOrEmpty(frag)) continue;
-
-            // skip if in ignore list
-            if (ignoreSet.Contains(frag)) continue;
-
-            // skip if contains numbers (e.g., P12S)
-            if (System.Text.RegularExpressions.Regex.IsMatch(frag, "\\d")) continue;
-
-            // skip slash commands
-            if (frag.StartsWith("/")) continue;
-
-            // skip URLs
-            if (frag.Contains("://")) continue;
-
-            try
-            {
-                if (s.Offset >= 0 && s.Offset + s.Length <= output.Length)
-                {
-                    output = output.Substring(0, s.Offset) + s.SuggestedText + output.Substring(s.Offset + s.Length);
-                }
-            }
-            catch { }
-        }
-
+        foreach (var s in Filter(original, suggestions).OrderByDescending(s => s.Offset))
+            output = output.Remove(s.Offset, s.Length).Insert(s.Offset, s.SuggestedText);
         return output;
     }
 }

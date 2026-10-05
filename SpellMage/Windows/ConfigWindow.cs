@@ -1,66 +1,38 @@
-﻿using System;
+using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+namespace SpellMage.Windows;
 
-namespace SamplePlugin.Windows;
-
-public class ConfigWindow : Window, IDisposable
+public sealed class ConfigWindow : Window, IDisposable
 {
-    private readonly Configuration configuration;
-
-    // We give this window a constant ID using ###.
-    // This allows for labels to be dynamic, like "{FPS Counter}fps###XYZ counter window",
-    // and the window ID will always be "###XYZ counter window" for ImGui
-    public ConfigWindow(Plugin plugin) : base("A Wonderful Configuration Window###With a constant ID")
+    private readonly Configuration config;
+    private readonly Action changed;
+    public ConfigWindow(Configuration config, Action changed) : base("SpellMage Settings")
     {
-        Flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar |
-                ImGuiWindowFlags.NoScrollWithMouse;
-
-        Size = new Vector2(232, 90);
-        SizeCondition = ImGuiCond.Always;
-
-        configuration = plugin.Configuration;
+        this.config = config;
+        this.changed = changed;
+        Size = new Vector2(600, 360);
+        SizeCondition = ImGuiCond.FirstUseEver;
     }
-
-    public void Dispose() { }
-
-    public override void PreDraw()
-    {
-        // Flags must be added or removed before Draw() is being called, or they won't apply
-        if (configuration.IsConfigWindowMovable)
-        {
-            Flags &= ~ImGuiWindowFlags.NoMove;
-        }
-        else
-        {
-            Flags |= ImGuiWindowFlags.NoMove;
-        }
-    }
-
     public override void Draw()
     {
-        // Can't ref a property, so use a local copy
-        var configValue = configuration.SomePropertyToBeSavedAndWithADefault;
-        if (ImGui.Checkbox("Random Config Bool", ref configValue))
-        {
-            configuration.SomePropertyToBeSavedAndWithADefault = configValue;
-            // Can save immediately on change if you don't want to provide a "Save and Close" button
-            configuration.Save();
-        }
-
-        var movable = configuration.IsConfigWindowMovable;
-        if (ImGui.Checkbox("Movable Config Window", ref movable))
-        {
-            configuration.IsConfigWindowMovable = movable;
-            configuration.Save();
-        }
-
-        var nativeRead = configuration.EnableNativeChatRead;
-        if (ImGui.Checkbox("Enable Native Chat Read (experimental)", ref nativeRead))
-        {
-            configuration.EnableNativeChatRead = nativeRead;
-            configuration.Save();
-        }
+        ImGui.TextWrapped("Checking sends your text to the configured LanguageTool server. LanguageTool: https://languagetool.org");
+        var dirty = false;
+        var enabled = config.ApiEnabled;
+        if (ImGui.Checkbox("Enable API checking", ref enabled)) { config.ApiEnabled = enabled; dirty = true; }
+        var language = config.Language;
+        if (ImGui.InputText("Language (e.g. en-US or auto)", ref language, 64)) { config.Language = language; dirty = true; }
+        var endpoint = config.Endpoint;
+        if (ImGui.InputText("Check endpoint", ref endpoint, 512)) { config.Endpoint = endpoint; dirty = true; }
+        ImGui.TextWrapped("Use HTTPS, or HTTP on localhost. The public endpoint supports manual checks only. Live checking requires your own LanguageTool server.");
+        var native = config.EnableNativeChatRead;
+        if (ImGui.Checkbox("Read native chat input (experimental)", ref native)) { config.EnableNativeChatRead = native; dirty = true; }
+        var live = config.EnableLiveChecking;
+        if (ImGui.Checkbox("Check while typing (private server only)", ref live)) { config.EnableLiveChecking = live; dirty = true; }
+        var overlay = config.ShowOverlay;
+        if (ImGui.Checkbox("Show native suggestions overlay", ref overlay)) { config.ShowOverlay = overlay; dirty = true; }
+        if (dirty) { config.Save(); changed(); }
     }
+    public void Dispose() { }
 }

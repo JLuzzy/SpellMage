@@ -1,39 +1,49 @@
-name: Sample PR Builder for SamplePlugin
-
+name: SpellMage build and tests
 on:
+  push:
+    branches: [master, main, 'dev/**']
   pull_request:
-    branches: [ master ]
-
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-
   build:
     runs-on: windows-2022
-
-    env:
-      Solution_Name: SamplePlugin
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v5
-
-    - name: Install .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: 10.0.x
-
-    - name: Download Dalamud
-      run: |
-        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
-        Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
-
-    - name: Build with dotnet
-      run: dotnet build --configuration Release
-
-    - name: Store artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: SamplePlugin
-        path: .\SamplePlugin\bin\x64\Release\SamplePlugin\*
-        if-no-files-found: error
-        retention-days: 1
-
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile "$env:RUNNER_TEMP/dalamud.zip"
+          Expand-Archive -Force "$env:RUNNER_TEMP/dalamud.zip" "$env:RUNNER_TEMP/dalamud"
+          "DALAMUD_HOME=$env:RUNNER_TEMP/dalamud" >> $env:GITHUB_ENV
+      - name: Test correction and request handling
+        run: dotnet run --project SpellMage.Tests/SpellMage.Tests.csproj --configuration Release
+      - name: Build plugin
+        run: |
+          dotnet restore SpellMage.sln --locked-mode
+          dotnet build SpellMage.sln --configuration Release --no-restore
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem SpellMage/bin -Recurse -Filter SpellMage.dll | Select-Object -First 1
+          if (!$dll) { throw 'SpellMage.dll missing' }
+          if (!(Test-Path (Join-Path $dll.DirectoryName 'Dictionaries/ffxiv-ignore.txt'))) { throw 'Dictionary missing' }
+          if (!(Test-Path (Join-Path $dll.DirectoryName 'SpellMage.json'))) { throw 'Manifest missing' }
+          $zip = Get-ChildItem SpellMage/bin -Recurse -Filter latest.zip | Select-Object -First 1
+          if (!$zip) { throw 'Release ZIP missing' }
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          try {
+            foreach ($entry in @('SpellMage.dll', 'SpellMage.json', 'Dictionaries/ffxiv-ignore.txt')) {
+              if ($entry -notin $archive.Entries.FullName) { throw "ZIP missing $entry" }
+            }
+          } finally { $archive.Dispose() }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpellMage
+          path: SpellMage/bin/**/SpellMage/*
+          if-no-files-found: error
+          retention-days: 7

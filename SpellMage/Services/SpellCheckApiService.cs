@@ -1,122 +1,80 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using SamplePlugin.Models;
-using Dalamud.Plugin;
+using SpellMage.Models;
 
-namespace SamplePlugin.Services;
+namespace SpellMage.Services;
+
+public sealed record CheckSettings(bool Enabled, string Language, string Endpoint)
+{
+    public const string PublicEndpoint = "https://api.languagetool.org/v2/check";
+    public bool IsPrivateEndpoint => Uri.TryCreate(Endpoint, UriKind.Absolute, out var uri)
+        && !uri.Host.Equals("api.languagetool.org", StringComparison.OrdinalIgnoreCase);
+}
 
 public sealed class SpellCheckApiService : IDisposable
 {
     private readonly HttpClient client;
-
-    public SpellCheckApiService()
+    public SpellCheckApiService(HttpMessageHandler? handler = null)
     {
-        client = new HttpClient();
+        client = handler == null ? new HttpClient() : new HttpClient(handler);
         client.Timeout = TimeSpan.FromSeconds(10);
-        client.DefaultRequestHeaders.UserAgent.Clear();
         client.DefaultRequestHeaders.UserAgent.ParseAdd("SpellMage/0.1");
     }
 
-    public async Task<SpellCheckResult> CheckAsync(string text, string language = "en-US", CancellationToken cancellationToken = default)
+    public async Task<SpellCheckResult> CheckAsync(string text, CheckSettings settings, CancellationToken token = default)
     {
-        var result = new SpellCheckResult
-        {
-            OriginalText = text ?? string.Empty,
-            CorrectedText = string.Empty,
-            Suggestions = Array.Empty<SpellSuggestion>(),
-            Success = false,
-            StatusMessage = string.Empty,
-            UsedApi = false
-        };
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            result.Success = true;
-            result.CorrectedText = text ?? string.Empty;
-            return result;
-        }
-
+        var result = new SpellCheckResult { OriginalText = text, CorrectedText = text };
+        if (!settings.Enabled) { result.StatusMessage = "API checking is disabled in settings."; return result; }
+        if (!Uri.TryCreate(settings.Endpoint, UriKind.Absolute, out var endpoint)
+            || (endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && endpoint.IsLoopback))
+            || !string.IsNullOrEmpty(endpoint.UserInfo))
+        { result.StatusMessage = "Use an HTTPS endpoint (HTTP is allowed for localhost)."; return result; }
+        if (string.IsNullOrWhiteSpace(settings.Language))
+        { result.StatusMessage = "Choose a language in settings."; return result; }
+        if (Encoding.UTF8.GetByteCount(text) > 19000)
+        { result.StatusMessage = "Text is too long (maximum 19,000 UTF-8 bytes)."; return result; }
+        if (string.IsNullOrWhiteSpace(text)) { result.Success = true; result.StatusMessage = "No text to check."; return result; }
         try
         {
-            var values = new List<KeyValuePair<string, string>> {
-                new("text", text),
-                new("language", language ?? "en-US")
-            };
-
-            using var content = new FormUrlEncodedContent(values);
-            using var resp = await client.PostAsync("https://api.languagetool.org/v2/check", content, cancellationToken).ConfigureAwait(false);
+            using var content = new FormUrlEncodedContent(new Dictionary<string, string> { ["text"] = text, ["language"] = settings.Language });
             result.UsedApi = true;
-
-            if (!resp.IsSuccessStatusCode)
+            using var response = await client.PostAsync(endpoint, content, token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
             {
-                result.StatusMessage = $"HTTP {resp.StatusCode}";
-                Plugin.Log.Warning($"LanguageTool returned {resp.StatusCode}");
+                result.StatusMessage = response.StatusCode == HttpStatusCode.TooManyRequests
+                    ? "Rate limit reached. Wait before checking again." : $"Spell-check server returned HTTP {(int)response.StatusCode}.";
                 return result;
             }
-
-            var stream = await resp.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            var lt = await JsonSerializer.DeserializeAsync<LanguageToolResponse>(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (lt == null)
-            {
-                result.StatusMessage = "Empty response";
-                return result;
-            }
-
+            using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            var parsed = await JsonSerializer.DeserializeAsync<LanguageToolResponse>(stream, cancellationToken: token).ConfigureAwait(false);
+            if (parsed?.matches == null) { result.StatusMessage = "Invalid spell-check response."; return result; }
             var suggestions = new List<SpellSuggestion>();
-            if (lt.matches != null)
+            foreach (var match in parsed.matches)
             {
-                foreach (var m in lt.matches)
-                {
-                    var replacement = string.Empty;
-                    if (m.replacements != null && m.replacements.Length > 0)
-                    {
-                        replacement = m.replacements[0].value ?? string.Empty;
-                    }
-
-                    var s = new SpellSuggestion
-                    {
-                        OriginalText = text.Substring(m.offset, Math.Min(m.length, Math.Max(0, text.Length - m.offset))),
-                        SuggestedText = replacement,
-                        Offset = m.offset,
-                        Length = m.length,
-                        Message = m.message,
-                        RuleId = m.rule?.id,
-                        RuleDescription = m.rule?.description,
-                        Category = m.rule?.category?.name,
-                        IsApplied = false
-                    };
-
-                    suggestions.Add(s);
-                }
+                if (match == null || !CorrectionService.IsValidRange(text, match.offset, match.length)) continue;
+                if (match.replacements == null || match.replacements.Length == 0) continue;
+                var replacement = match.replacements[0]?.value;
+                if (replacement == null) continue;
+                suggestions.Add(new SpellSuggestion {
+                    OriginalText = text.Substring(match.offset, match.length), SuggestedText = replacement,
+                    Offset = match.offset, Length = match.length, Message = match.message ?? string.Empty,
+                    RuleId = match.rule?.id, RuleDescription = match.rule?.description, Category = match.rule?.category?.name
+                });
             }
-
-            result.Suggestions = suggestions.AsReadOnly();
-            result.CorrectedText = text; // leave to CorrectionService
+            result.Suggestions = suggestions;
             result.Success = true;
-            result.StatusMessage = "OK";
-            return result;
+            result.StatusMessage = "Check complete. Select the corrections you want to use.";
         }
-        catch (OperationCanceledException)
-        {
-            result.StatusMessage = "Canceled";
-            Plugin.Log.Warning("Spell check canceled");
-            return result;
-        }
-        catch (Exception ex)
-        {
-            result.StatusMessage = ex.Message;
-            Plugin.Log.Error(ex, "SpellCheckApiService.CheckAsync failed");
-            return result;
-        }
+        catch (OperationCanceledException) { result.StatusMessage = token.IsCancellationRequested ? "Canceled" : "Spell-check request timed out."; }
+        catch (HttpRequestException) { result.StatusMessage = "Cannot reach the spell-check server."; }
+        catch (JsonException) { result.StatusMessage = "Invalid spell-check response."; }
+        return result;
     }
-
-    public void Dispose()
-    {
-        client.Dispose();
-    }
+    public void Dispose() => client.Dispose();
 }

@@ -1,4 +1,4 @@
-namespace SamplePlugin.Models;
+namespace SpellMage.Models;
 
 public class SpellSuggestion
 {
@@ -10,6 +10,5 @@ public class SpellSuggestion
     public string? RuleId { get; set; }
     public string? RuleDescription { get; set; }
     public string? Category { get; set; }
-    public double Confidence { get; set; }
     public bool IsApplied { get; set; }
 }

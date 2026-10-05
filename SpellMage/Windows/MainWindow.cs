@@ -1,204 +1,85 @@
-﻿using System;
+using System;
+using System.Linq;
 using System.Numerics;
-using System.Threading.Tasks;
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.Utility;
-using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
-using SamplePlugin.Services;
-using SamplePlugin.Models;
+using SpellMage.Models;
+using SpellMage.Services;
+namespace SpellMage.Windows;
 
-namespace SamplePlugin.Windows;
-
-public class MainWindow : Window, IDisposable
+public sealed class MainWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
-    private readonly SpellCheckApiService apiService;
-    private readonly CorrectionService correctionService;
-    private readonly ChatSender chatSender;
-    private readonly ChatSuggestionOverlay overlay;
-    private readonly string goatImagePath;
-
-    private bool apiEnabled = true;
-    private string language = "en-US";
-    private string inputText = "teh party is redy for pull";
-    private string status = "Idle";
-    private string correctedText = string.Empty;
+    private readonly CorrectionService corrections;
+    private readonly SpellCheckDebounceService request;
+    private string input = string.Empty;
+    private string output = string.Empty;
+    private string status = "Enter text, then check it.";
     private IReadOnlyList<SpellSuggestion> suggestions = Array.Empty<SpellSuggestion>();
-    private bool isChecking = false;
-
-    public MainWindow(Plugin plugin, SpellCheckApiService apiService, CorrectionService correctionService, ChatSender chatSender, ChatSuggestionOverlay overlay, string goatImagePath)
-        : base("SpellMage")
+    private bool hasResult;
+    public MainWindow(Plugin plugin, SpellCheckApiService api, CorrectionService corrections) : base("SpellMage")
     {
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(500, 300),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
-        };
-
-        this.plugin = plugin;
-        this.apiService = apiService;
-        this.correctionService = correctionService;
-        this.chatSender = chatSender;
-        this.overlay = overlay;
-        this.goatImagePath = goatImagePath;
+        this.plugin = plugin; this.corrections = corrections; request = new(api);
+        Size = new Vector2(650, 560); SizeCondition = ImGuiCond.FirstUseEver;
     }
-
-    public void Dispose() { }
-
+    public void Invalidate()
+    {
+        request.Cancel(); suggestions = Array.Empty<SpellSuggestion>(); output = string.Empty; hasResult = false;
+        status = "Text or settings changed. Check again.";
+    }
+    public void CheckText(string text)
+    {
+        input = text; IsOpen = true; Invalidate();
+        request.Start(input, plugin.Configuration.GetCheckSettings()); status = "Checking...";
+    }
     public override void Draw()
     {
-        ImGui.TextWrapped("Privacy: When API checking is enabled, text is sent to LanguageTool (https://languagetool.org).");
-        ImGui.Spacing();
-
-        ImGui.Checkbox("API enabled", ref apiEnabled);
+        ImGui.TextWrapped("LanguageTool: https://languagetool.org — checking sends text to the server selected in Settings.");
+        if (ImGui.Button("Settings")) plugin.ToggleConfigUi();
         ImGui.SameLine();
-        var overlayEnabled = overlay != null && overlay.IsOpen;
-        if (ImGui.Button(overlayEnabled ? "Hide Overlay" : "Show Overlay (test)"))
+        if (ImGui.Button("Read current chat draft"))
         {
-            if (overlay != null)
-                overlay.IsOpen = !overlay.IsOpen;
+            var snapshot = plugin.LatestSnapshot;
+            if (!plugin.Configuration.EnableNativeChatRead) status = "Enable native reading in Settings first.";
+            else if (!snapshot.IsAvailable) status = "Focus the game chat input first.";
+            else { input = snapshot.Text; Invalidate(); }
         }
-        ImGui.SameLine();
-        if (ImGui.Button("Inspect Chat Addon"))
+        ImGui.Text("Message:");
+        if (ImGui.InputTextMultiline("##input", ref input, 4096, new Vector2(-1, 100))) Invalidate();
+        var result = request.Poll();
+        if (result != null)
         {
-            try
-            {
-                var report = plugin.NativeChatService.InspectAddons();
-                Plugin.Log.Information(report);
-                status = report.Length > 200 ? report.Substring(0, 200) + "..." : report;
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error(ex, "Inspect button failed");
-                status = "Inspect failed";
-            }
+            hasResult = result.Success;
+            suggestions = result.Success ? corrections.Filter(result.OriginalText, result.Suggestions) : Array.Empty<SpellSuggestion>();
+            output = result.Success ? result.OriginalText : string.Empty;
+            status = result.StatusMessage;
         }
-
+        ImGui.BeginDisabled(request.IsChecking || string.IsNullOrWhiteSpace(input));
+        if (ImGui.Button("Check")) CheckText(input);
+        ImGui.EndDisabled();
         ImGui.SameLine();
-        if (ImGui.Button("Inspect Native Chat Input"))
-        {
-            try
-            {
-                if (!plugin.Configuration.EnableNativeChatRead)
-                {
-                    status = "Native chat read disabled in config.";
-                    Plugin.Log.Information("Inspect Native Chat Input skipped: EnableNativeChatRead is false in configuration.");
-                }
-                else
-                {
-                    var report = plugin.NativeChatService.InspectNativeAddons();
-                    Plugin.Log.Information(report);
-                    status = report.Length > 200 ? report.Substring(0, 200) + "..." : report;
-                }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error(ex, "Inspect Native Chat Input failed");
-                status = "Inspect native failed";
-            }
-        }
-        ImGui.SameLine();
-        ImGui.InputText("Language", ref language, 64);
-
+        ImGui.BeginDisabled(!hasResult);
+        if (ImGui.Button("Copy reviewed text")) ImGui.SetClipboardText(output);
+        ImGui.EndDisabled();
+        ImGui.TextWrapped(status);
         ImGui.Separator();
-
-        ImGui.Text("Input text:");
-        ImGui.InputTextMultiline("##input", ref inputText, 4096, new Vector2(-1, 100));
-
-        if (ImGui.Button("Check"))
+        ImGui.Text("Choose corrections:");
+        var index = 0;
+        foreach (var suggestion in suggestions)
         {
-            _ = DoCheckAsync();
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Copy Corrected to Clipboard"))
-        {
-            try { ImGui.SetClipboardText(correctedText); } catch { }
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Send Corrected Message"))
-        {
-            try
+            var selected = suggestion.IsApplied;
+            if (ImGui.Checkbox($"{suggestion.OriginalText} → {suggestion.SuggestedText}##suggestion{index++}", ref selected))
             {
-                chatSender.SendMessage(correctedText);
-                status = "Send requested (log-only)";
+                suggestion.IsApplied = selected;
+                output = corrections.ApplyCorrections(input, suggestions.Where(s => s.IsApplied).ToArray());
             }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error(ex, "Send failed");
-                status = "Send failed";
-            }
+            ImGui.TextWrapped(suggestion.Message);
         }
-
+        if (hasResult && suggestions.Count == 0) ImGui.Text("No applicable corrections.");
         ImGui.Separator();
-
-        ImGui.Text($"Status: {status}");
-        ImGui.Separator();
-
-        ImGui.Text("Suggestions:");
-        using (var child = ImRaii.Child("suggChild", new Vector2(0, 120), true))
-        {
-            if (child.Success)
-            {
-                foreach (var s in suggestions)
-                {
-                    ImGui.TextColored(new System.Numerics.Vector4(0.9f,0.6f,0.0f,1.0f), $"[{s.Offset}] '{s.OriginalText}' -> '{s.SuggestedText}'");
-                    ImGui.TextWrapped($"  {s.Message} ({s.RuleId} / {s.Category})");
-                }
-            }
-        }
-
-        ImGui.Separator();
-        ImGui.Text("Corrected output:");
-        ImGui.InputTextMultiline("##corrected", ref correctedText, 8192, new Vector2(-1, 80), ImGuiInputTextFlags.ReadOnly);
+        ImGui.Text("Reviewed text:");
+        ImGui.InputTextMultiline("##output", ref output, 8192, new Vector2(-1, 100), ImGuiInputTextFlags.ReadOnly);
     }
-
-    private async Task DoCheckAsync()
-    {
-        if (isChecking) return;
-        isChecking = true;
-        status = "Checking...";
-
-        try
-        {
-            if (!apiEnabled)
-            {
-                status = "API disabled";
-                isChecking = false;
-                return;
-            }
-
-            var res = await apiService.CheckAsync(inputText, language);
-            if (!res.Success)
-            {
-                status = $"Error: {res.StatusMessage}";
-                suggestions = Array.Empty<SpellSuggestion>();
-                correctedText = inputText;
-            }
-            else
-            {
-                suggestions = res.Suggestions;
-                    correctedText = correctionService.ApplyCorrections(res.OriginalText, res.Suggestions);
-                    // update overlay if present
-                    try
-                    {
-                        overlay?.SetSuggestions(res.Suggestions, "");
-                    }
-                    catch { }
-                status = "OK";
-            }
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error(ex, "Check failed");
-            status = "Exception during check";
-        }
-        finally
-        {
-            isChecking = false;
-        }
-    }
+    public void Dispose() => request.Dispose();
 }

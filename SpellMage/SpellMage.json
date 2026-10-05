@@ -2,7 +2,7 @@
   "Author": "Jake",
   "Name": "SpellMage",
   "Punchline": "API-powered spell-check helper for FFXIV chat.",
-  "Description": "Provides user-triggered spell-check suggestions and command-based correction for chat messages using LanguageTool. Does not edit the native chat bar.",
+  "Description": "Review LanguageTool suggestions and copy selected corrections. Optional experimental native chat reading; live checks require a private server. Does not edit or send game chat.",
   "ApplicableVersion": "any",
   "Tags": [
     "chat",

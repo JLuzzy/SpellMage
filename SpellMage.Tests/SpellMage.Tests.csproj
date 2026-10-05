@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../SpellMage/Models/*.cs" Link="Models/%(Filename)%(Extension)" />
+    <Compile Include="../SpellMage/Services/CorrectionService.cs" Link="CorrectionService.cs" />
+    <Compile Include="../SpellMage/Services/SpellCheckApiService.cs" Link="SpellCheckApiService.cs" />
+    <Compile Include="../SpellMage/Services/SpellCheckDebounceService.cs" Link="SpellCheckDebounceService.cs" />
+  </ItemGroup>
+</Project>
